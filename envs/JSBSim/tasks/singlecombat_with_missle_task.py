@@ -189,7 +189,7 @@ class SingleCombatShootMissileTask(SingleCombatDodgeMissileTask):
         super().reset(env)
     
     def step(self, env):
-        SingleCombatTask.step(self, env)
+        SingleCombatTask.step(self, env)   # 根据方位角和距离计算两个agent的权重参数
         for agent_id, agent in env.agents.items():
             # [RL-based missile launch with limited condition]
             shoot_flag = agent.is_alive and self._shoot_action[agent_id] and self.remaining_missiles[agent_id] > 0
@@ -223,6 +223,10 @@ class HierarchicalSingleCombatShootTask(HierarchicalSingleCombatTask, SingleComb
     def normalize_action(self, env, agent_id, action):
         """Convert high-level action into low-level action.
         """
+        # # add by wangjian 20240925
+        # if action is None or len(action) == 0:
+        #     return  # 直接返回，不做处理
+
         self._shoot_action[agent_id] = action[-1]
         return HierarchicalSingleCombatTask.normalize_action(self, env, agent_id, action[:-1].astype(np.int32))
 

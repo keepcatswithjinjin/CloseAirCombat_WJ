@@ -42,9 +42,9 @@ class PPOTrainer():
                                                                          masks_batch)
 
         # Obtain the loss function
-        ratio = torch.exp(action_log_probs - old_action_log_probs_batch)
-        surr1 = ratio * advantages_batch
-        surr2 = torch.clamp(ratio, 1.0 - self.clip_param, 1.0 + self.clip_param) * advantages_batch
+        ratio = torch.exp(action_log_probs - old_action_log_probs_batch)  # 当前动作概率和旧动作概率的比值
+        surr1 = ratio * advantages_batch  # 未裁剪
+        surr2 = torch.clamp(ratio, 1.0 - self.clip_param, 1.0 + self.clip_param) * advantages_batch # 裁剪后
         policy_loss = torch.sum(torch.min(surr1, surr2), dim=-1, keepdim=True)
         policy_loss = -policy_loss.mean()
 

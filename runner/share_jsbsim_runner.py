@@ -72,7 +72,6 @@ class ShareJSBSimRunner(Runner):
         episodes = self.num_env_steps // self.buffer_size // self.n_rollout_threads
 
         for episode in range(episodes):
-
             for step in range(self.buffer_size):
                 # Sample actions
                 values, actions, action_log_probs, rnn_states_actor, rnn_states_critic = self.collect(step)
@@ -111,6 +110,7 @@ class ShareJSBSimRunner(Runner):
 
                 train_infos["average_episode_rewards"] = self.buffer.rewards.sum() / (self.buffer.masks == False).sum()
                 logging.info("average episode rewards is {}".format(train_infos["average_episode_rewards"]))
+
                 self.log_info(train_infos, self.total_num_steps)
 
             # eval

@@ -111,12 +111,13 @@ def main(args):
     # wandb
     if all_args.use_wandb:
         run = wandb.init(config=all_args,
-                         project=all_args.env_name,
+                         project=all_args.env_name,   #Project
                          notes=socket.gethostname(),
                          name=f"{all_args.experiment_name}_seed{all_args.seed}_{all_args.user_name}",
                          group=all_args.scenario_name,
                          dir=str(run_dir),
                          job_type="training",
+                         entity="Catjinjin",
                          reinit=True)
     else:
         if not run_dir.exists():

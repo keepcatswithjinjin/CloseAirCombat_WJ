@@ -5,7 +5,9 @@ import logging
 import numpy as np
 from typing import List
 from .base_runner import Runner, ReplayBuffer
-
+from algorithms.SARS.rff_mapping import rff_mapping
+from algorithms.SARS.rff_kernel_density import rff_kernel_density
+from tqdm import tqdm
 
 def _t2n(x):
     return x.detach().cpu().numpy()
@@ -35,27 +37,148 @@ class JSBSimRunner(Runner):
             self.restore(self.use_best)
 
     def run(self):
-        self.warmup()
+        self.warmup()  # 重置环境
 
         start = time.time()
         self.total_num_steps = 0
         episodes = self.num_env_steps // self.buffer_size // self.n_rollout_threads
+        # add by wangjian 20240925
+        num_agents = 1
+        num_envs = 4
 
-        for episode in range(episodes):
+        for episode in tqdm(range(episodes), desc="total process Episode"):
 
             heading_turns_list = []
             # 20240426 add by ash0^0
             end_step_list = []
             termination_list = []
 
-            for step in range(self.buffer_size):
-                # Sample actions
-                values, actions, action_log_probs, rnn_states_actor, rnn_states_critic = self.collect(step)
+            """
+            # 暂时/成功/失败状态缓存区
+            Ds_buffer = []   # Ds
+            Df_buffer = []   # Df
+            # add by wangjian 20240905
+            # 初始化不同环境和代理的缓冲区
+            Ds_buffer = [[[] for _ in range(num_agents)] for _ in range(num_envs)]
+            Df_buffer = [[[] for _ in range(num_agents)] for _ in range(num_envs)]
+            temp_buffer = [[[] for _ in range(num_agents)] for _ in range(num_envs)]
+            """
 
-                # Obser reward and next obs
+            # 一次循环就是一次交互过程  循环结束后  会出现若干个任务结束的  trajectory : (s,a,r,s1,a1,r1........)
+            for step in tqdm(range(self.buffer_size), desc="Collecting information step"):
+                # Sample actions   values: 状态价值函数 s下期望的回报  用于计算优势函数
+                # 采样动作用到 obs  更新obs时将obs装进buffer
+                values, actions, action_log_probs, rnn_states_actor, rnn_states_critic = self.collect(step)
+                # reward and next obs  reward: 回报  Rt   用于计算优势函数
+
                 obs, rewards, dones, infos = self.envs.step(actions)
 
-                # Extra recorded information
+                """
+                # =========================================S_A_S_R==============================================
+
+                # SARS v1.0
+                # 需要将收集的信息从obs_buffer[] 中将不同环境不同代理的奖励单独遍历进行计算
+                for env_idx in range(num_envs):
+                    for agent_idx in range(num_agents):  # 遍历每个代理
+                        agent_obs = obs[env_idx][agent_idx] # 获取当前代理的obs
+                        agent_reward = rewards[env_idx][agent_idx]  # 获取当前代理的奖励
+                        temp_buffer[env_idx][agent_idx].append(agent_obs)
+
+                        if 'termination' in infos[env_idx]:  # 同一个环境终止条件是同一个
+                            # 拿到终止条件
+                            termination = infos[env_idx]['termination']
+                            # print("termination : {}, env:{}, agent:{}".format(termination, env_idx, agent_idx))
+                            # 判断6个终止条件 达到任何一个条件  trajectory形成
+                            termination_flag = ((termination & (1 | 2 | 4 | 8 | 16 | 32)) != 0)  # 任意一位被置位
+                            if termination_flag:
+                                # print("\n")
+                                # print("\n")
+                                # print("!!!!!!!!!!!!!!!!!termination!!!!!!!!!!!!!!!!!!!!!! env:{}, agent:{} ".format(env_idx, agent_idx))
+                                # print("\n")
+                                # print("\n")
+                                # 拿到6个不同的终止标志位
+                                unreach_heading_flag = (termination & 1)
+                                extreme_state_flag = ((termination >> 1) & 1)
+                                overload_flag = ((termination >> 2) & 1)
+                                low_altitude_flag = ((termination >> 3) & 1)
+                                timeout_flag = ((termination >> 4) & 1)
+                                safe_return_flag = ((termination >> 5) & 1)
+                                reach_heading_flag = ((termination >> 6) & 1)
+
+                                # (1) 1v1 single_combat   env_num = 4  agent_num = 2
+                                # flag: safe_return(安全返回 打掉敌机)
+
+                                # (2) 1 single_control_heading env_num = 4 agent_num = 1
+                                # flag: low_altitude / unreached_heading...
+
+                                # 根据不同的任务设置不同的终止标志  将 成功/失败 的obs加入 Ds_buffer/Df_buffer
+                                if unreach_heading_flag | overload_flag | timeout_flag:
+                                    # Ds_buffer[env_idx][agent_idx].extend(temp_buffer[env_idx][agent_idx])  # 将成功的obs加入成功缓冲区
+                                    Df_buffer[env_idx][agent_idx].extend(temp_buffer[env_idx][agent_idx])
+                                elif reach_heading_flag:
+                                    # Df_buffer[env_idx][agent_idx].extend(temp_buffer[env_idx][agent_idx])  # 将失败的obs加入失败缓冲区
+                                    Ds_buffer[env_idx][agent_idx].extend(temp_buffer[env_idx][agent_idx])
+                                else:
+                                    Df_buffer[env_idx][agent_idx].extend(temp_buffer[env_idx][agent_idx])
+                                temp_buffer[env_idx][agent_idx].clear()  # 清空对应暂存buffer
+
+                        total_success = sum(len(buffer) for buffer in Ds_buffer[env_idx][agent_idx])
+                        total_failure = sum(len(buffer) for buffer in Df_buffer[env_idx][agent_idx])
+                        # print("total_success:{}, total_failure:{}, env:{}, agent:{}".format(total_success, total_failure, env_idx, agent_idx))
+                        N = total_success + total_failure
+                        # print("N : {}".format(N))
+                        M = 500  # RFF 随机特征维数M  : 50会降低性能  应取500 1000 2000
+                        sigma = 0.2  # RFF 高斯核带宽 h
+                        # 在计算密度之前检查缓冲区
+                        if len(Ds_buffer[env_idx][agent_idx]) > 0:
+
+                            Ns_i_density = rff_kernel_density(agent_obs, Ds_buffer[env_idx][agent_idx], M, sigma)
+
+                            # gpu--->cpu
+                            # Ns_i_density = rff_kernel_density(agent_obs, Ds_buffer[env_idx][agent_idx], M, sigma).cpu()
+                            flag_s = 1
+                            # print("env_idx:{}, agent_idx:{}, Ns_i_density:{}".format(env_idx, agent_idx, Ns_i_density))
+                        else:
+                            Ns_i_density = 0  # 或者其他处理方式，例如返回默认值
+                            flag_s = 0
+
+                        if len(Df_buffer[env_idx][agent_idx]) > 0:
+
+                            Nf_i_density = rff_kernel_density(agent_obs, Df_buffer[env_idx][agent_idx], M, sigma)
+
+                            # gpu--->cpu
+                            # Nf_i_density = rff_kernel_density(agent_obs, Df_buffer[env_idx][agent_idx], M, sigma).cpu()
+                            flag_f = 1
+                            # print("env_idx:{}, agent_idx:{}, Nf_i_density:{}".format(env_idx, agent_idx, Nf_i_density))
+
+                        else:
+                            Nf_i_density = 0  # 或者其他处理方式
+                            flag_f = 0
+                        if flag_s + flag_f > 0:
+                            # tensor * int ---> int
+                            Ns_i_count = N * Ns_i_density
+                            Nf_i_count = N * Nf_i_density
+
+                            # print("env:{}, agent:{}, Ns_i_count:{}".format(env_idx, agent_idx, Ns_i_count))
+                            # print("env:{}, agent:{}, Nf_i_count:{}".format(env_idx, agent_idx, Nf_i_count))
+
+                            alpha = Ns_i_count + 1
+                            beta = Nf_i_count + 1
+
+                            rs_i = np.random.beta(alpha, beta)
+
+
+                            # print("rs_i_env_idx:{}, rs_i_agent_idx:{}, rs_i:{}".format(env_idx, agent_idx, rs_i))
+
+                            a = 0.4  # 成型奖励的权重 0.4 0.6 0.8
+                            rewards[env_idx][agent_idx] = agent_reward + a * rs_i  # 更新当前代理的奖励
+
+                #=========================================S_A_S_R==============================================
+                """
+
+                # Extra recorded information  每次循环将该次的info加入列表中 表示不同轨迹下的info 在一个buffer全部循环完之后
+                # 再依次判断列表中的不同轨迹下该次的info情况  通过位运算判断标志位
+                # 每次循环开始时info中的键值清零  这样才能正确根据状态位来判断
                 for info in infos:
                     if 'heading_turn_counts' in info:
                         heading_turns_list.append(info['heading_turn_counts'])
@@ -67,11 +190,12 @@ class JSBSimRunner(Runner):
                 data = obs, actions, rewards, dones, action_log_probs, values, rnn_states_actor, rnn_states_critic
 
                 # insert data into buffer
+                # 下一次采样动作时用到buffer中这一次的的obs
                 self.insert(data)
 
             # compute return and update network
             # Inherit from parent class Runner
-            self.compute()
+            self.compute()   # 计算优势函数中的一部分 ： rt + γ * V_θ(S_t+1)
             train_infos = self.train()
 
             # post process
@@ -111,14 +235,13 @@ class JSBSimRunner(Runner):
                     timeout_counts = 0
                     safe_return_counts = 0
                     for termination in termination_list:
-                        unreach_heading_counts += (termination & 1)
+                        # unreach_heading_counts += (termination & 1)
                         extreme_state_counts += ((termination >> 1) & 1)
                         overload_counts += ((termination >> 2) & 1)
                         low_altitude_counts += ((termination >> 3) & 1)
                         timeout_counts += ((termination >> 4) & 1)
                         safe_return_counts += ((termination >> 5) & 1)
-
-                    train_infos["unreach_heading_prop"] = unreach_heading_counts / done_counts
+                    # train_infos["unreach_heading_prop"] = unreach_heading_counts / done_counts
                     train_infos["extreme_state_prop"] = extreme_state_counts / done_counts
                     train_infos["overload_prop"] = overload_counts / done_counts
                     train_infos["low_altitude_prop"] = low_altitude_counts / done_counts
@@ -131,9 +254,6 @@ class JSBSimRunner(Runner):
                     logging.info("{:^20} | {:^20.4f} | {:^20.4f} | {:^20.4f} | {:^20.4f} | {:^20.4f} | {:^20.4f}"
                                  .format(train_infos["done_counts"], train_infos["unreach_heading_prop"], train_infos["extreme_state_prop"],
                                          train_infos["overload_prop"], train_infos["low_altitude_prop"], train_infos["timeout_prop"], train_infos["safe_return_prop"]))
-
-
-
 
                 self.log_info(train_infos, self.total_num_steps)
 

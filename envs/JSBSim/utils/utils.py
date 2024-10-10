@@ -81,7 +81,7 @@ def get_AO_TA_R(ego_feature, enm_feature, return_side=False):
         side_flag = np.sign(np.cross([ego_vx, ego_vy], [delta_x, delta_y]))
         return ego_AO, ego_TA, R, side_flag
 
-
+    # 计算在二维平面上两个飞行器（己方和敌方）的相对角度、航向角、距离以及方向标志。
 def get2d_AO_TA_R(ego_feature, enm_feature, return_side=False):
     ego_x, ego_y, ego_z, ego_vx, ego_vy, ego_vz = ego_feature
     ego_v = np.linalg.norm([ego_vx, ego_vy])

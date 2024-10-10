@@ -237,6 +237,7 @@ class HierarchicalSingleCombatTask(SingleCombatTask):
             return action
         else:
             # generate low-level input_obs
+
             raw_obs = self.get_obs(env, agent_id)
             input_obs = np.zeros(12)
             # (1) delta altitude/heading/velocity
@@ -246,6 +247,7 @@ class HierarchicalSingleCombatTask(SingleCombatTask):
             # (2) ego info
             input_obs[3:12] = raw_obs[:9]
             input_obs = np.expand_dims(input_obs, axis=0)
+
             # output low-level action
             _action, _rnn_states = self.lowlevel_policy(input_obs, self._inner_rnn_states[agent_id])
             action = _action.detach().cpu().numpy().squeeze(0)

@@ -24,6 +24,10 @@ class Timeout(BaseTerminationCondition):
             (tuple): (done, success, info)
         """
         done = env.current_step >= self.max_steps
+        #TODO wangjian_fix
+        if 'termination' not in info:
+            info['termination'] = 0
+
         if done:
             info['termination'] += 16
             self.log(f"{agent_id} step limits! Total Steps={env.current_step}")

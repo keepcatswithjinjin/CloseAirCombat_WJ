@@ -33,7 +33,9 @@ ego_run_dir = "/home/lqh/jyh/CloseAirCombat/scripts/results/MultipleCombat/2v2/N
 enm_run_dir = "/home/lqh/jyh/CloseAirCombat/scripts/results/MultipleCombat/2v2/NoWeapon/HierarchySelfplay/mappo/artillery_check/wandb/latest-run/files"
 experiment_name = ego_run_dir.split('/')[-4]
 
-env = MultipleCombatEnv("2v2/NoWeapon/HierarchySelfplay")
+# env = MultipleCombatEnv("2v2/NoWeapon/HierarchySelfplay")
+env = MultipleCombatEnv("2v2/NoWeapon/Hierarchy")
+
 env.seed(0)
 args = Args()
 

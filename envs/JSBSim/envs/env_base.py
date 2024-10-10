@@ -21,7 +21,7 @@ class BaseEnv(gymnasium.Env):
 
     def __init__(self, config_name: str):
         # basic args
-        self.config = parse_config(config_name)
+        self.config = parse_config(config_name)   # 从yaml中获取参数
         self.max_steps = getattr(self.config, 'max_steps', 100)  # type: int
         self.sim_freq = getattr(self.config, 'sim_freq', 60)  # type: int
         self.agent_interaction_steps = getattr(self.config, 'agent_interaction_steps', 12)  # type: int
@@ -125,15 +125,17 @@ class BaseEnv(gymnasium.Env):
         info = {"current_step": self.current_step}
         # apply actions
         action = self._unpack(action)
+
         for agent_id in self.agents.keys():
             a_action = self.task.normalize_action(self, agent_id, action[agent_id])
             self.agents[agent_id].set_property_values(self.task.action_var, a_action)
         # run simulation
         for _ in range(self.agent_interaction_steps):
-            for sim in self._jsbsims.values():
+            for sim in self._jsbsims.values():   # aircraft simulation
                 sim.run()
-            for sim in self._tempsims.values():
+            for sim in self._tempsims.values():  # missile simulation
                 sim.run()
+        # 不同任务中对交互后的agent的状态数据进行处理  包括导弹
         self.task.step(self)
 
         obs = self.get_obs()

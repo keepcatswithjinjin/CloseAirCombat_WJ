@@ -103,7 +103,7 @@ class BaseTask(ABC):
         """
         done = False
         success = True
-        for condition in self.termination_conditions:
+        for condition in self.termination_conditions:   # 所有条件中止才算中止
             d, s, info = condition.get_termination(self, env, agent_id, info)
             done = done or d
             success = success and s

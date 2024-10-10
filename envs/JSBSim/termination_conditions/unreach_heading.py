@@ -36,6 +36,8 @@ class UnreachHeading(BaseTerminationCondition):
         success = False
         cur_step = info['current_step']
         check_time = env.agents[agent_id].get_property_value(c.heading_check_time)
+        # print("check_time : {}".format(check_time))
+
         # check heading when simulation_time exceed check_time
         if env.agents[agent_id].get_property_value(c.simulation_sim_time_sec) >= check_time:
             if math.fabs(env.agents[agent_id].get_property_value(c.delta_heading)) > 10:
@@ -58,6 +60,7 @@ class UnreachHeading(BaseTerminationCondition):
                 env.agents[agent_id].set_property_value(c.target_velocities_u_mps, new_velocities_u)
                 env.agents[agent_id].set_property_value(c.heading_check_time, check_time + self.check_interval)
                 env.heading_turn_counts += 1
+                info['termination'] += 64
                 self.log(f'current_step:{cur_step} target_heading:{new_heading} '
                          f'target_altitude_ft:{new_altitude} target_velocities_u_mps:{new_velocities_u}')
 
