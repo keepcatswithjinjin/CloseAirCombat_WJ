@@ -14,7 +14,7 @@ acceleration_limit_z: 10.0
 
 # aircraft config
 use_baseline: true
-baseline_type: pursue
+baseline_type: pursue    # 训练躲避  追击的agent使用baseline行动
 aircraft_configs: {
   A0100: {
     color: Red,

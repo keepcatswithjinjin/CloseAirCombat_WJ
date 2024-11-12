@@ -6,11 +6,9 @@ import torch
 # s (21,)  W (21,100)
 def rff_mapping(s, M, sigma):
     s = np.array(s)
-
     k = len(s)  # 维度
     W = np.random.normal(0, 1 / sigma, (k, M))  # 随机矩阵 W
     b = np.random.uniform(0, 2 * np.pi, M)  # 随机偏移量 b
-
     return np.sqrt(2 / M) * np.cos(np.dot(W.T, s) + b)
 
     # gpu

@@ -4,7 +4,7 @@ from gymnasium import spaces
 from .task_base import BaseTask
 from ..core.catalog import Catalog as c
 from ..reward_functions import AltitudeReward, HeadingReward, TimeoutReward
-from ..termination_conditions import ExtremeState, LowAltitude, Overload, Timeout, UnreachHeading
+from ..termination_conditions import ExtremeState, LowAltitude, Overload, Timeout, UnreachHeading, DeltaKeeping
 from ..utils.utils import body2ned, ned2body
 
 class HeadingTask(BaseTask):
@@ -36,6 +36,8 @@ class HeadingTask(BaseTask):
             Overload(self.config),
             LowAltitude(self.config),
             Timeout(self.config),
+
+            # DeltaKeeping(self.config)
         ]
 
     @property

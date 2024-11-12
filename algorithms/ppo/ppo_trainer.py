@@ -82,7 +82,9 @@ class PPOTrainer():
         train_info['actor_grad_norm'] = 0
         train_info['critic_grad_norm'] = 0
         train_info['ratio'] = 0
-
+        train_info['average_Ns_counts'] = 0
+        train_info['average_Nf_counts'] = 0
+        train_info['average_beta_distribution'] = 0
         # The number of optimizations performed per training cycle
         # It is also the number of times each Buffer is reused.
         for _ in range(self.ppo_epoch):

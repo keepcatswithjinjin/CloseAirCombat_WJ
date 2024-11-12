@@ -48,11 +48,11 @@ class ReplayBuffer(Buffer):
 
         obs_shape = get_shape_from_space(obs_space)
         act_shape = get_shape_from_space(act_space)
-
         # (o_0, a_0, r_0, d_1, o_1, ... , d_T, o_T)
         self.obs = np.zeros((self.buffer_size + 1, self.n_rollout_threads, self.num_agents, *obs_shape), dtype=np.float32)
         self.actions = np.zeros((self.buffer_size, self.n_rollout_threads, self.num_agents, *act_shape), dtype=np.float32)
         self.rewards = np.zeros((self.buffer_size, self.n_rollout_threads, self.num_agents, 1), dtype=np.float32)
+
         # NOTE: masks[t] = 1 - dones[t-1], which represents whether obs[t] is a terminal state
         self.masks = np.ones((self.buffer_size + 1, self.n_rollout_threads, self.num_agents, 1), dtype=np.float32)
         # NOTE: bad_masks[t] = 'bad_transition' in info[t-1], which indicates whether obs[t] a true terminal state or time limit end state
@@ -105,10 +105,12 @@ class ReplayBuffer(Buffer):
         self.value_preds[self.step] = value_preds.copy()
         self.rnn_states_actor[self.step + 1] = rnn_states_actor.copy()
         self.rnn_states_critic[self.step + 1] = rnn_states_critic.copy()
+
         if bad_masks is not None:
             self.bad_masks[self.step + 1] = bad_masks.copy()
 
         self.step = (self.step + 1) % self.buffer_size
+
 
     def after_update(self):
         """Copy last timestep data to first index. Called after update to model."""
@@ -163,6 +165,7 @@ class ReplayBuffer(Buffer):
             else:
                 self.returns[-1] = next_value
                 for step in reversed(range(self.rewards.shape[0])):
+
                     self.returns[step] = self.returns[step + 1] * self.gamma * self.masks[step + 1] + self.rewards[step]
 
     @staticmethod

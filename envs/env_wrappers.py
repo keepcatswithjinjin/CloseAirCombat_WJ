@@ -72,6 +72,9 @@ class VecEnv(ABC):
         pass
 
     @abstractmethod
+    def clear_buffers(self):
+        pass
+    @abstractmethod
     def step_async(self, actions):
         """
         Tell all the environments to start taking a step
@@ -118,6 +121,7 @@ class VecEnv(ABC):
         """
         self.step_async(actions)
         return self.step_wait()
+
 
 
 class DummyVecEnv(VecEnv):
@@ -188,6 +192,8 @@ def worker(remote: Connection, parent_remote: Connection, env_fn_wrappers):
         parent_remote (Connection): used for mainprocess to send/receive data. [Need to be closed in subprocess!]
         env_fn_wrappers (method): functions to create gym.Env instance.
     """
+
+
     def step_env(env, action):
         obs, reward, done, info = env.step(action)
         if 'bool' in done.__class__.__name__:
@@ -209,7 +215,7 @@ def worker(remote: Connection, parent_remote: Connection, env_fn_wrappers):
         while True:
             cmd, data = remote.recv()
             if cmd == 'step':
-                remote.send([step_env(env, action) for env, action in zip(envs, data)])
+                remote.send([step_env(env, action) for env, action in zip(envs, data)])   # step + 判断是否reset
             elif cmd == 'reset':
                 remote.send([env.reset() for env in envs])
             elif cmd == 'close':
@@ -219,6 +225,8 @@ def worker(remote: Connection, parent_remote: Connection, env_fn_wrappers):
                 remote.send(CloudpickleWrapper((envs[0].observation_space, envs[0].action_space)))
             elif cmd == 'get_num_agents':
                 remote.send(CloudpickleWrapper((getattr(envs[0], "num_agents", 1))))
+            elif cmd == 'clear_buffers':
+                remote.send([env.clear_buffers() for env in envs])
             else:
                 raise NotImplementedError
     except KeyboardInterrupt:
@@ -278,8 +286,10 @@ class SubprocVecEnv(VecEnv):
         results = [remote.recv() for remote in self.remotes]
         results = self._flatten_series(results)  # [[tuple] * in_series] * nremotes => [tuple] * nenvs
         self.waiting = False
+        # print("results:", results)
         obss, rewards, dones, infos = zip(*results)
         return self._flatten(obss), self._flatten(rewards), self._flatten(dones), np.array(infos)
+
 
     def reset(self):
         self._assert_not_closed()
@@ -288,6 +298,13 @@ class SubprocVecEnv(VecEnv):
         obss = [remote.recv() for remote in self.remotes]
         obss = self._flatten_series(obss)
         return self._flatten(obss)
+
+    def clear_buffers(self):
+        self._assert_not_closed()
+        for remote in self.remotes:
+            remote.send(('clear_buffers', None))
+        results = [remote.recv() for remote in self.remotes]
+        return np.array(results)
 
     def close_extras(self):
         if self.waiting:
@@ -318,7 +335,6 @@ class SubprocVecEnv(VecEnv):
         assert all([len(v_) > 0 for v_ in v])
 
         return [v__ for v_ in v for v__ in v_]
-
 
 class ShareVecEnv(VecEnv):
     """

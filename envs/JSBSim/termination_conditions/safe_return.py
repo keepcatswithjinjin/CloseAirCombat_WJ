@@ -31,12 +31,12 @@ class SafeReturn(BaseTerminationCondition):
 
         if env.agents[agent_id].is_shotdown:
             self.log(f'{agent_id} has been shot down! Total Steps={env.current_step}')
-            # info['termination'] += 32
+            info['termination'] += 32
             return True, False, info
 
         elif env.agents[agent_id].is_crash:
             self.log(f'{agent_id} has crashed! Total Steps={env.current_step}')
-            # info['termination'] += 32
+            info['termination'] += 32
             return True, False, info
 
         # all the enemy-aircrafts has been destroyed while current aircraft is not under attack

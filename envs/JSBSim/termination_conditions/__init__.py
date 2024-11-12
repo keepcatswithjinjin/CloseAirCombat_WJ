@@ -4,3 +4,4 @@ from .overload import Overload
 from .safe_return import SafeReturn
 from .timeout import Timeout
 from .unreach_heading import UnreachHeading
+from .keep_angle import DeltaKeeping

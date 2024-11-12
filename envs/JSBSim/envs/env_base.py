@@ -1,11 +1,19 @@
+import os
+import random
+import sys
+
 import gymnasium
 from gymnasium.utils import seeding
 import numpy as np
-from typing import Dict, Any, Tuple
+from typing import Dict, Any, Tuple, Union, List
+
+from numpy import ndarray
+
 from ..core.simulatior import AircraftSimulator, BaseSimulator
 from ..tasks.task_base import BaseTask
 from ..utils.utils import parse_config
-
+from algorithms.SARS.rff_kernel_density import rff_kernel_density
+from algorithms.SARS.augment_observations_with_noise import augment_observations_with_noise
 
 class BaseEnv(gymnasium.Env):
     """
@@ -21,13 +29,25 @@ class BaseEnv(gymnasium.Env):
 
     def __init__(self, config_name: str):
         # basic args
-        self.config = parse_config(config_name)   # 从yaml中获取参数
+        self.config = parse_config(config_name)  # 从yaml中获取参数
         self.max_steps = getattr(self.config, 'max_steps', 100)  # type: int
         self.sim_freq = getattr(self.config, 'sim_freq', 60)  # type: int
         self.agent_interaction_steps = getattr(self.config, 'agent_interaction_steps', 12)  # type: int
         self.center_lon, self.center_lat, self.center_alt = \
             getattr(self.config, 'battle_field_center', (120.0, 60.0, 0.0))
         self._create_records = False
+        # TODO new
+        self.num_agent = 1
+        self.Ds_buffer = [[] for _ in range(self.num_agent)]
+        self.Df_buffer = [[] for _ in range(self.num_agent)]
+        self.temp_buffer = [[] for _ in range(self.num_agent)]
+        self.noisy_trajectories = []
+
+        self.M = 500  # RFF 随机特征维数M  : 50会降低性能  应取500 1000 2000
+        self.sigma = 0.2  # RFF 高斯核带宽 h
+        self.N = 0  # 总计数
+        self.a = 0.4  # 成型奖励的权重 0.4 0.6 0.8
+        self.retention_rate = 0.6
         self.load()
 
     @property
@@ -59,7 +79,7 @@ class BaseEnv(gymnasium.Env):
         self.task = BaseTask(self.config)
 
     def load_simulator(self):
-        self._jsbsims = {}     # type: Dict[str, AircraftSimulator]
+        self._jsbsims = {}  # type: Dict[str, AircraftSimulator]
         for uid, config in self.config.aircraft_configs.items():
             self._jsbsims[uid] = AircraftSimulator(
                 uid=uid,
@@ -84,7 +104,7 @@ class BaseEnv(gymnasium.Env):
                 else:
                     sim.enemies.append(s)
 
-        self._tempsims = {}    # type: Dict[str, BaseSimulator]
+        self._tempsims = {}  # type: Dict[str, BaseSimulator]
 
     def add_temp_simulator(self, sim: BaseSimulator):
         self._tempsims[sim.uid] = sim
@@ -105,7 +125,8 @@ class BaseEnv(gymnasium.Env):
         obs = self.get_obs()
         return self._pack(obs)
 
-    def step(self, action: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray, dict]:
+    def step(self, action: np.ndarray) -> Tuple[
+        ndarray, ndarray, ndarray, Union[Dict[str, int], dict]]:
         """Run one timestep of the environment's dynamics. When end of
         episode is reached, you are responsible for calling `reset()`
         to reset this environment's observation. Accepts an action and
@@ -125,13 +146,15 @@ class BaseEnv(gymnasium.Env):
         info = {"current_step": self.current_step}
         # apply actions
         action = self._unpack(action)
-
+        # print("actio_unpack", action, flush=True)
         for agent_id in self.agents.keys():
+            # 返回下层控制动作
             a_action = self.task.normalize_action(self, agent_id, action[agent_id])
+            # print("a_action", a_action, flush=True)
             self.agents[agent_id].set_property_values(self.task.action_var, a_action)
         # run simulation
         for _ in range(self.agent_interaction_steps):
-            for sim in self._jsbsims.values():   # aircraft simulation
+            for sim in self._jsbsims.values():  # aircraft simulation
                 sim.run()
             for sim in self._tempsims.values():  # missile simulation
                 sim.run()
@@ -150,7 +173,132 @@ class BaseEnv(gymnasium.Env):
             reward, info = self.task.get_reward(self, agent_id, info)
             rewards[agent_id] = [reward]
 
+        # return self._pack(obs), self._pack(rewards), self._pack(dones), info
+        # print("rewards: ", rewards)   # rewards:  {'A0100': [9.143880041153126e-58]}
+        # print("rewards: ", rewards["A0100"])  #rewards:  [1.6445475577171327e-60]
+        # print("obs: ", obs)  #  {'A0100': array([ 1.40549983e-04, -3.31629529e-03, -1.20981263e-03,  1.64144502e+00,
+        # 7.07679238e-02,  9.97492807e-01,  8.94750118e-03,  9.99959970e-01,
+        # 7.29377415e-01, -1.44880734e-03,  1.13319705e-02,  4.96129541e-01])}
+
+        # print("dones: ", dones)    # dones:  {'A0100': [False]}
+        # print("info : ", info)  # info :  {'current_step': 1, 'termination': 64}
+        # """
+        # TODO new
+        # obs_pack = self._pack(obs)
+        # reward_pack = self._pack(rewards)
+        for agent_idx in range(self.num_agents):  # 遍历每个代理
+            agent_obs = obs["A0100"]
+            self.temp_buffer[agent_idx].append(agent_obs)
+            if 'termination' in info:  # 同一个环境终止条件是同一个
+                # 拿到终止条件
+                termination = info['termination']
+                # 判断6个终止条件 达到任何一个条件  trajectory形成
+                termination_flag = ((termination & (1 | 2 | 4 | 8 | 16 | 32 | 64)) != 0)  # 任意一位被置位
+                if termination_flag:
+                    unreach_heading_flag = (termination & 1)
+                    # extreme_state_flag = ((termination >> 1) & 1)
+                    # overload_flag = ((termination >> 2) & 1)
+                    low_altitude_flag = ((termination >> 3) & 1)
+                    # timeout_flag = ((termination >> 4) & 1)
+                    # safe_return_flag = ((termination >> 5) & 1)
+                    # reach_heading_flag = ((termination >> 6) & 1)
+                    # deltaKeeping_flag = ((termination >> 7) & 1)
+
+                    # 成功率
+                    # if reach_heading_flag:
+                    #     self.Ds_buffer[agent_idx].extend(self.temp_buffer[agent_idx])
+                    # else:
+                    #     self.Df_buffer[agent_idx].extend(self.temp_buffer[agent_idx])
+
+                    #保留率
+                    if random.random() < self.retention_rate:
+                        # 失败率
+                        if unreach_heading_flag | low_altitude_flag:
+                            self.Df_buffer[agent_idx].extend(self.temp_buffer[agent_idx])
+                        # elif reach_heading_flag:
+                        #     # print(" Enforcement!", flush=True)
+                        #     # TODO 样本增强
+                        #     noisy_trajectories = self.augment_observations_with_noise(self.temp_buffer[agent_idx])
+                        #     flattened_trajectories = np.vstack(noisy_trajectories)  # 100个轨迹（n * 12）
+                        #     self.Ds_buffer[agent_idx].extend(flattened_trajectories)
+                        #     self.Ds_buffer[agent_idx].extend(self.temp_buffer[agent_idx])
+                        #     # self.Ds_buffer[agent_idx].extend(self.temp_buffer[agent_idx])
+                        else:
+                            self.Ds_buffer[agent_idx].extend(self.temp_buffer[agent_idx])
+                        self.temp_buffer[agent_idx].clear()  # 清空对应暂存buffer
+                    else:
+                        self.temp_buffer[agent_idx].clear()  # 清空对应暂存buffer
+
+
+                    rs_i, Ns_i_count, Nf_i_count = self.calculate_additional_reward(agent_obs,
+                                                                                    self.Ds_buffer[agent_idx],
+                                                                                    self.Df_buffer[agent_idx], self.M,
+                                                                                    self.sigma)
+                    if 'Ns_count' not in info:
+                        info['Ns_count'] = 0
+                    if 'Nf_count' not in info:
+                        info['Nf_count'] = 0
+                    if 'beta' not in info:
+                        info['beta'] = 0
+
+                    info['Ns_count'] = Ns_i_count
+                    info['Nf_count'] = Nf_i_count
+                    info['beta'] = rs_i
+                    # print("Ns_i_count", Ns_i_count, flush=True)
+                    # print("Nf_i_count", Nf_i_count, flush=True)
+                    # print("rs_i : {}".format(rs_i), flush=True)
+                    rewards["A0100"][0] = rewards["A0100"][0] - self.a * rs_i * 10  # √
+                    # print("fix_rewards", rewards)
+                    # print(info)
+        # """
         return self._pack(obs), self._pack(rewards), self._pack(dones), info
+
+    def augment_observations_with_noise(self, observations, noise_std=0.01, num_copies=30):
+        """
+        为轨迹中的每个观察值添加噪声，生成多条增强轨迹。
+
+        参数:
+        - observations: 原始轨迹中的观察值列表，每个元素是一个观察值（例如numpy数组）
+        - noise_std: 噪声的标准差，控制噪声幅度
+        - num_copies: 生成的增强轨迹数量
+
+        返回:
+        - augmented_trajectories: 增强后的轨迹列表，每条轨迹是一个带噪声的观察值序列
+        """
+        augmented_trajectories = []
+
+        for _ in range(num_copies):
+            noisy_trajectory = [
+                obs + np.random.normal(0, noise_std, size=np.shape(obs)) for obs in observations
+            ]
+            augmented_trajectories.append(noisy_trajectory)
+
+        return augmented_trajectories
+
+
+
+
+    def calculate_additional_reward(self, obs, Ds_buffer, Df_buffer, M, sigma=0.2):
+        # Ns_i_density 和 Nf_i_density 的计算
+        # if len(Ds_buffer) > 0:
+        Ns_i_density = rff_kernel_density(obs, Ds_buffer, M, sigma)
+        # if len(Ds_buffer) > 0:
+        Nf_i_density = rff_kernel_density(obs, Df_buffer, M, sigma)
+        total_success = len(Ds_buffer)
+        total_failure = len(Df_buffer)
+        N = total_success + total_failure
+        Ns_i_count = N * Ns_i_density
+        Nf_i_count = N * Nf_i_density
+        alpha = Ns_i_count + 1
+        beta = Nf_i_count + 1
+
+        # return np.random.beta(alpha, beta), total_success, total_failure  # 成功率
+        return np.random.beta(beta, alpha), total_success, total_failure   # 失败率
+
+    def clear_buffers(self):
+        self.Ds_buffer.clear()
+        self.Df_buffer.clear()
+
 
     def get_obs(self):
         """Returns all agent observations in a list.
@@ -264,3 +412,7 @@ class BaseEnv(gymnasium.Env):
         for agent_id in (self.ego_ids + self.enm_ids)[self.num_agents:]:
             unpack_data[agent_id] = None
         return unpack_data
+
+    @num_agents.setter
+    def num_agents(self, value):
+        self._num_agents = value

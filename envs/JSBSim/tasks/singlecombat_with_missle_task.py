@@ -225,8 +225,9 @@ class HierarchicalSingleCombatShootTask(HierarchicalSingleCombatTask, SingleComb
         """
         # # add by wangjian 20240925
         # if action is None or len(action) == 0:
-        #     return  # 直接返回，不做处理
-
+        #     HierarchicalSingleCombatTask.normalize_action(self, env, agent_id, action[:-1].astype(np.int32))
+        # if action is None:
+        #     raise ValueError(f"Action for agent {agent_id} is None.")
         self._shoot_action[agent_id] = action[-1]
         return HierarchicalSingleCombatTask.normalize_action(self, env, agent_id, action[:-1].astype(np.int32))
 

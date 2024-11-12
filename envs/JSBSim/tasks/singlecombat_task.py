@@ -349,6 +349,8 @@ class PursueAgent(BaselineAgent):
     def __init__(self) -> None:
         super().__init__()
 
+
+    # 计算并返回与敌机之间的相对位置、航向和速度差异
     def set_delta_value(self, sim: AircraftSimulator):
         # NOTE: only adapt for 1v1
         ego_x, ego_y, ego_z = sim.get_position()
@@ -391,6 +393,7 @@ class ManeuverAgent(BaselineAgent):
         self.rnn_states = np.zeros((1, 1, 128))
         self.init_heading = None
 
+    # 对目标航向、目标高度和目标速度的跟踪，计算并返回与目标状态之间的差异  目标状态是我们给的
     def set_delta_value(self, sim: AircraftSimulator):
         step_list = np.arange(1, len(self.target_heading_list)+1) * self.turn_interval / 0.2
         cur_heading = sim.get_property_value(c.attitude_heading_true_rad)

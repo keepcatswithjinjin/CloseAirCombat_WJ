@@ -24,6 +24,8 @@ class ExtremeState(BaseTerminationCondition):
             (tuple): (done, success, info)
         """
         done = bool(env.agents[agent_id].get_property_value(c.detect_extreme_state))
+
+
         if done:
             env.agents[agent_id].crash()
             info['termination'] += 2
